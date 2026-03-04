@@ -1,109 +1,116 @@
-/**
- * POST /api/check-availability
- * Body: { "datetime": "2025-03-15T10:00:00Z" }  (ISO 8601)
- * Returns: { available: true/false, slots_taken: [...], message: "..." }
- */
+const MONDAY_API_URL = "https://api.monday.com/v2";
+const COL_DATETIME   = "date_mks930kf";  // "Fecha y hora visita"
 
-const { queryMondayVisits, parseColumnDate } = require('../lib/monday');
-
-// How many minutes around a requested slot count as "occupied"
-const SLOT_BUFFER_MINUTES = parseInt(process.env.SLOT_BUFFER_MINUTES || '60', 10);
+const pad = (n) => String(n).padStart(2, "0");
 
 module.exports = async function handler(req, res) {
-  // CORS headers (needed for ElevenLabs & Postman)
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  if (req.method === "OPTIONS") return res.status(200).end();
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method !== "GET" && req.method !== "POST")
+    return res.status(405).json({ error: "Usa GET o POST" });
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed. Use POST.' });
-  }
-
-  // --- Auth guard (optional API key) ---
+  // Auth guard
   const apiKey = process.env.WEBHOOK_API_KEY;
   if (apiKey) {
-    const provided = req.headers['authorization']?.replace('Bearer ', '').trim();
-    if (provided !== apiKey) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+    const provided = req.headers["authorization"]?.replace("Bearer ", "").trim();
+    if (provided !== apiKey)
+      return res.status(401).json({ error: "Unauthorized" });
   }
 
-  // --- Validate input ---
-  const { datetime } = req.body || {};
-  if (!datetime) {
-    return res.status(400).json({
-      error: 'Missing required field: datetime (ISO 8601, e.g. "2025-03-15T10:00:00Z")',
-    });
-  }
+  const params = req.method === "GET" ? req.query : req.body;
+  const { datetime, start } = params;
+  const input = datetime || start;
 
-  const requestedDate = new Date(datetime);
-  if (isNaN(requestedDate.getTime())) {
-    return res.status(400).json({
-      error: 'Invalid datetime format. Use ISO 8601 (e.g. "2025-03-15T10:00:00Z")',
-    });
-  }
+  if (!input)
+    return res.status(400).json({ error: "Proporciona 'datetime' en formato ISO 8601. Ej: 2026-03-10T17:00:00" });
 
-  // --- Query Monday.com ---
-  let visits;
+  const dt = new Date(input);
+  if (isNaN(dt.getTime()))
+    return res.status(400).json({ error: "Fecha inválida. Usa ISO 8601." });
+
+  const dateStr     = dt.toISOString().split("T")[0];
+  const timeStr     = `${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:00`;
+  const timeDisplay = timeStr.slice(0, 5);
+
+  const token   = process.env.MONDAY_API_TOKEN;
+  const boardId = process.env.MONDAY_BOARD_ID;
+
+  if (!token)   return res.status(500).json({ error: "MONDAY_API_TOKEN no configurado" });
+  if (!boardId) return res.status(500).json({ error: "MONDAY_BOARD_ID no configurado" });
+
   try {
-    visits = await queryMondayVisits(requestedDate);
-  } catch (err) {
-    console.error('[monday] Query error:', err.message);
-    return res.status(502).json({
-      error: 'Failed to query Monday.com',
-      detail: err.message,
+    const r = await fetch(MONDAY_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: token,
+        "API-Version": "2024-01",
+      },
+      body: JSON.stringify({
+        query: `
+          query ($boardId: ID!) {
+            boards(ids: [$boardId]) {
+              items_page(limit: 500) {
+                items {
+                  id
+                  name
+                  column_values(ids: ["${COL_DATETIME}"]) {
+                    id text value
+                  }
+                }
+              }
+            }
+          }
+        `,
+        variables: { boardId },
+      }),
     });
+
+    const json = await r.json();
+
+    if (json.errors?.length)
+      return res.status(502).json({ error: "Monday API error", detail: json.errors });
+
+    const items = json?.data?.boards?.[0]?.items_page?.items || [];
+
+    const conflicts = items.filter((item) => {
+      const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
+
+      let itemDate = "", itemTime = "";
+      try {
+        const v = JSON.parse(dtCol?.value || "{}");
+        itemDate = v.date || "";
+        itemTime = v.time || "";
+      } catch {
+        const parts = (dtCol?.text || "").split(" ");
+        itemDate = parts[0] || "";
+        itemTime = parts[1] ? `${parts[1]}:00` : "";
+      }
+
+      return itemDate === dateStr && itemTime === timeStr;
+    });
+
+    const available = conflicts.length === 0;
+
+    return res.status(200).json({
+      available,
+      date: dateStr,
+      time: timeDisplay,
+      requested_datetime: dt.toISOString(),
+      conflicts_found: conflicts.length,
+      slots_taken: conflicts.map((i) => ({
+        id: i.id,
+        name: i.name,
+      })),
+      message: available
+        ? `El ${dateStr} a las ${timeDisplay} está disponible.`
+        : `El ${dateStr} a las ${timeDisplay} NO está disponible (${conflicts.length} reserva/s existente/s).`,
+    });
+
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
-
-  // --- Check availability ---
-  const conflicts = visits.filter((v) => {
-    const visitDate = parseColumnDate(v.visit_datetime);
-    if (!visitDate) return false;
-    const diffMs = Math.abs(visitDate.getTime() - requestedDate.getTime());
-    const diffMin = diffMs / 60000;
-    return diffMin < SLOT_BUFFER_MINUTES;
-  });
-
-  const available = conflicts.length === 0;
-
-  const slotsTaken = conflicts.map((v) => ({
-    id: v.id,
-    name: v.name,
-    visit_datetime: v.visit_datetime,
-    status: v.lead_status,
-  }));
-
-  // Build a human-readable message (useful for ElevenLabs)
-  let message;
-  if (available) {
-    message = `El horario del ${formatSpanish(requestedDate)} está disponible.`;
-  } else {
-    const taken = conflicts.map((v) => v.visit_datetime).join(', ');
-    message = `El horario del ${formatSpanish(requestedDate)} NO está disponible. Hay ${conflicts.length} visita(s) en esa franja: ${taken}. Por favor, proponga otro horario.`;
-  }
-
-  return res.status(200).json({
-    available,
-    requested_datetime: requestedDate.toISOString(),
-    slot_buffer_minutes: SLOT_BUFFER_MINUTES,
-    conflicts_found: conflicts.length,
-    slots_taken: slotsTaken,
-    message,
-  });
 };
-
-function formatSpanish(date) {
-  return date.toLocaleString('es-ES', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'Europe/Madrid',
-  });
-}
