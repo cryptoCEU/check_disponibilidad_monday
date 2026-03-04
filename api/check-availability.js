@@ -1,8 +1,6 @@
 const MONDAY_API_URL = "https://api.monday.com/v2";
 const COL_DATETIME   = "date_mks930kf";  // "Fecha y hora visita"
 
-const pad = (n) => String(n).padStart(2, "0");
-
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -21,22 +19,22 @@ module.exports = async function handler(req, res) {
 
   const params = req.method === "GET" ? req.query : req.body;
   const { datetime, start } = params;
-  const input = datetime || start;
+  const input = (datetime || start || "").trim();
 
   if (!input)
-    return res.status(400).json({ error: "Proporciona 'datetime' en formato ISO 8601. Ej: 2026-03-10T17:00:00" });
+    return res.status(400).json({ error: "Proporciona 'datetime' en formato ISO 8601. Ej: 2026-03-10T10:00:00" });
 
-  const dt = new Date(input);
-  if (isNaN(dt.getTime()))
-    return res.status(400).json({ error: "Fecha inválida. Usa ISO 8601." });
+  // Extraer fecha y hora directamente del string, sin conversión de zona horaria
+  // Soporta: 2026-03-10T10:00:00, 2026-03-10T10:00:00Z, 2026-03-10T10:00:00+01:00
+  const match = input.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if (!match)
+    return res.status(400).json({ error: "Fecha inválida. Usa ISO 8601. Ej: 2026-03-10T10:00:00" });
 
-  // Convertir a hora de Madrid para comparar con raw_text de Monday
-  // Monday guarda UTC internamente pero raw_text muestra hora local de Madrid
-  const madridDate = dt.toLocaleDateString("en-CA", { timeZone: "Europe/Madrid" }); // YYYY-MM-DD
-  const madridTime = dt.toLocaleTimeString("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit" }); // HH:MM
+  const dateStr    = match[1];           // "2026-03-10"
+  const timeStr    = match[2];           // "10:00"
 
-  // raw_text de Monday tiene formato "YYYY-MM-DD HH:MM"
-  const targetText = `${madridDate} ${madridTime}`;
+  // Formato que usa Monday en raw_text: "2026-03-10 10:00"
+  const targetText = `${dateStr} ${timeStr}`;
 
   const token   = process.env.MONDAY_API_TOKEN;
   const boardId = process.env.MONDAY_BOARD_ID;
@@ -81,24 +79,21 @@ module.exports = async function handler(req, res) {
 
     const conflicts = items.filter((item) => {
       const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
-      const rawText = dtCol?.text || "";
-      // raw_text de Monday: "2026-03-10 10:00" — comparamos directamente
-      return rawText === targetText;
+      return (dtCol?.text || "") === targetText;
     });
 
     const available = conflicts.length === 0;
 
     return res.status(200).json({
       available,
-      date: madridDate,
-      time: madridTime,
-      requested_datetime: dt.toISOString(),
+      date: dateStr,
+      time: timeStr,
       comparing_against: targetText,
       conflicts_found: conflicts.length,
       slots_taken: conflicts.map((i) => ({ id: i.id, name: i.name })),
       message: available
-        ? `El ${madridDate} a las ${madridTime} está disponible.`
-        : `El ${madridDate} a las ${madridTime} NO está disponible (${conflicts.length} reserva/s existente/s).`,
+        ? `El ${dateStr} a las ${timeStr} está disponible.`
+        : `El ${dateStr} a las ${timeStr} NO está disponible (${conflicts.length} reserva/s existente/s).`,
     });
 
   } catch (err) {
