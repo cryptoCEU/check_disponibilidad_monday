@@ -12,7 +12,6 @@ module.exports = async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "POST")
     return res.status(405).json({ error: "Usa GET o POST" });
 
-  // Auth guard
   const apiKey = process.env.WEBHOOK_API_KEY;
   if (apiKey) {
     const provided = req.headers["authorization"]?.replace("Bearer ", "").trim();
@@ -76,6 +75,26 @@ module.exports = async function handler(req, res) {
 
     const items = json?.data?.boards?.[0]?.items_page?.items || [];
 
+    // Debug: show raw values from Monday for all items that have a date
+    const debugItems = items
+      .filter((item) => {
+        const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
+        return dtCol?.value && dtCol.value !== "null";
+      })
+      .map((item) => {
+        const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
+        let parsed = {};
+        try { parsed = JSON.parse(dtCol?.value || "{}"); } catch (_) {}
+        return {
+          id: item.id,
+          name: item.name,
+          raw_text: dtCol?.text,
+          raw_value: dtCol?.value,
+          parsed_date: parsed.date,
+          parsed_time: parsed.time,
+        };
+      });
+
     const conflicts = items.filter((item) => {
       const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
 
@@ -100,14 +119,13 @@ module.exports = async function handler(req, res) {
       date: dateStr,
       time: timeDisplay,
       requested_datetime: dt.toISOString(),
+      comparing: { dateStr, timeStr },
       conflicts_found: conflicts.length,
-      slots_taken: conflicts.map((i) => ({
-        id: i.id,
-        name: i.name,
-      })),
+      slots_taken: conflicts.map((i) => ({ id: i.id, name: i.name })),
       message: available
         ? `El ${dateStr} a las ${timeDisplay} está disponible.`
         : `El ${dateStr} a las ${timeDisplay} NO está disponible (${conflicts.length} reserva/s existente/s).`,
+      debug_items: debugItems,  // <-- ver qué devuelve Monday exactamente
     });
 
   } catch (err) {
