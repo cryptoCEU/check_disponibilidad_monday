@@ -1,0 +1,166 @@
+{
+  "info": {
+    "name": "Monday Availability Webhook",
+    "_postman_id": "monday-avail-v1",
+    "description": "Test the check-availability endpoint deployed on Vercel.\n\nSet the `baseUrl` and `apiKey` variables before running.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://your-project.vercel.app",
+      "description": "Change to your Vercel deployment URL (or http://localhost:3000 for local dev)"
+    },
+    {
+      "key": "apiKey",
+      "value": "your_secret_key_here",
+      "description": "Value of WEBHOOK_API_KEY env var (leave empty if not set)"
+    }
+  ],
+  "item": [
+    {
+      "name": "✅ Check available slot",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/check-availability", "host": ["{{baseUrl}}"], "path": ["api", "check-availability"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"datetime\": \"2025-04-10T10:00:00Z\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "Request a slot that is likely free. Expects available: true."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has available field', () => pm.expect(body).to.have.property('available'));",
+              "pm.test('Has message field', () => pm.expect(body).to.have.property('message'));",
+              "console.log('available:', body.available, '| message:', body.message);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🚫 Check occupied slot (same day)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/check-availability", "host": ["{{baseUrl}}"], "path": ["api", "check-availability"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"datetime\": \"2025-04-10T10:30:00Z\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "Request a slot 30 min after an existing visit (within the 60-min buffer). Expects available: false if that visit exists."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 200', () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "pm.test('Has available field', () => pm.expect(body).to.have.property('available'));",
+              "console.log('available:', body.available, '| conflicts:', body.conflicts_found);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "❌ Missing datetime",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/check-availability", "host": ["{{baseUrl}}"], "path": ["api", "check-availability"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "Should return 400 – missing required field."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 400', () => pm.response.to.have.status(400));",
+              "pm.test('Has error field', () => pm.expect(pm.response.json()).to.have.property('error'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "❌ Invalid date format",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{apiKey}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/check-availability", "host": ["{{baseUrl}}"], "path": ["api", "check-availability"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"datetime\": \"15/04/2025 10:00\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "Should return 400 – invalid ISO 8601 format."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 400', () => pm.response.to.have.status(400));",
+              "pm.test('Has error field', () => pm.expect(pm.response.json()).to.have.property('error'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔒 Unauthorized – wrong key",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer wrong_key" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/check-availability", "host": ["{{baseUrl}}"], "path": ["api", "check-availability"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"datetime\": \"2025-04-10T10:00:00Z\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "Should return 401 if WEBHOOK_API_KEY is set."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Status 401', () => pm.response.to.have.status(401));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

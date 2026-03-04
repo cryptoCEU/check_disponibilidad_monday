@@ -1,0 +1,24 @@
+{
+  "version": 2,
+  "build": {
+    "env": {
+      "NODE_VERSION": "24.x"
+    }
+  },
+  "functions": {
+    "api/**/*.js": {
+      "memory": 256,
+      "maxDuration": 15
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "POST, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
+      ]
+    }
+  ]
+}

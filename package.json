@@ -1,0 +1,14 @@
+{
+  "name": "monday-availability-webhook",
+  "version": "1.0.0",
+  "description": "Webhook that checks visit availability in Monday.com for ElevenLabs AI conversations",
+  "private": true,
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "test": "node scripts/test-local.js"
+  },
+  "dependencies": {}
+}
