@@ -30,9 +30,13 @@ module.exports = async function handler(req, res) {
   if (isNaN(dt.getTime()))
     return res.status(400).json({ error: "Fecha inválida. Usa ISO 8601." });
 
-  const dateStr     = dt.toISOString().split("T")[0];
-  const timeStr     = `${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:00`;
-  const timeDisplay = timeStr.slice(0, 5);
+  // Convertir a hora de Madrid para comparar con raw_text de Monday
+  // Monday guarda UTC internamente pero raw_text muestra hora local de Madrid
+  const madridDate = dt.toLocaleDateString("en-CA", { timeZone: "Europe/Madrid" }); // YYYY-MM-DD
+  const madridTime = dt.toLocaleTimeString("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", minute: "2-digit" }); // HH:MM
+
+  // raw_text de Monday tiene formato "YYYY-MM-DD HH:MM"
+  const targetText = `${madridDate} ${madridTime}`;
 
   const token   = process.env.MONDAY_API_TOKEN;
   const boardId = process.env.MONDAY_BOARD_ID;
@@ -75,57 +79,26 @@ module.exports = async function handler(req, res) {
 
     const items = json?.data?.boards?.[0]?.items_page?.items || [];
 
-    // Debug: show raw values from Monday for all items that have a date
-    const debugItems = items
-      .filter((item) => {
-        const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
-        return dtCol?.value && dtCol.value !== "null";
-      })
-      .map((item) => {
-        const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
-        let parsed = {};
-        try { parsed = JSON.parse(dtCol?.value || "{}"); } catch (_) {}
-        return {
-          id: item.id,
-          name: item.name,
-          raw_text: dtCol?.text,
-          raw_value: dtCol?.value,
-          parsed_date: parsed.date,
-          parsed_time: parsed.time,
-        };
-      });
-
     const conflicts = items.filter((item) => {
       const dtCol = item.column_values.find((c) => c.id === COL_DATETIME);
-
-      let itemDate = "", itemTime = "";
-      try {
-        const v = JSON.parse(dtCol?.value || "{}");
-        itemDate = v.date || "";
-        itemTime = v.time || "";
-      } catch {
-        const parts = (dtCol?.text || "").split(" ");
-        itemDate = parts[0] || "";
-        itemTime = parts[1] ? `${parts[1]}:00` : "";
-      }
-
-      return itemDate === dateStr && itemTime === timeStr;
+      const rawText = dtCol?.text || "";
+      // raw_text de Monday: "2026-03-10 10:00" — comparamos directamente
+      return rawText === targetText;
     });
 
     const available = conflicts.length === 0;
 
     return res.status(200).json({
       available,
-      date: dateStr,
-      time: timeDisplay,
+      date: madridDate,
+      time: madridTime,
       requested_datetime: dt.toISOString(),
-      comparing: { dateStr, timeStr },
+      comparing_against: targetText,
       conflicts_found: conflicts.length,
       slots_taken: conflicts.map((i) => ({ id: i.id, name: i.name })),
       message: available
-        ? `El ${dateStr} a las ${timeDisplay} está disponible.`
-        : `El ${dateStr} a las ${timeDisplay} NO está disponible (${conflicts.length} reserva/s existente/s).`,
-      debug_items: debugItems,  // <-- ver qué devuelve Monday exactamente
+        ? `El ${madridDate} a las ${madridTime} está disponible.`
+        : `El ${madridDate} a las ${madridTime} NO está disponible (${conflicts.length} reserva/s existente/s).`,
     });
 
   } catch (err) {
